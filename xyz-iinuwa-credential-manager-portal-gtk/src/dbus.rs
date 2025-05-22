@@ -371,6 +371,7 @@ impl CreateCredentialRequest {
             return Err(webauthn::Error::NotSupported);
         }
         let options = self.public_key.as_ref().unwrap();
+
         let request_value = serde_json::from_str::<serde_json::Value>(&options.request_json)
             .map_err(|_| webauthn::Error::Internal("Invalid request JSON".to_string()))?;
         let json = request_value
@@ -426,11 +427,12 @@ impl CreateCredentialRequest {
             };
         let extensions = if let Some(incoming_extensions) = other_options.extensions {
             let extensions = MakeCredentialsRequestExtensions {
+                cred_props: incoming_extensions.cred_props,
                 cred_blob: incoming_extensions
                     .cred_blob
                     .and_then(|x| URL_SAFE_NO_PAD.decode(x).ok()),
                 min_pin_length: incoming_extensions.min_pin_length,
-                cred_protect: match incoming_extensions.cred_protect_policy {
+                cred_protect: match incoming_extensions.credential_protection_policy {
                     Some(cred_prot_policy) => Some(CredentialProtectionExtension {
                         policy: cred_prot_policy,
                         enforce_policy: incoming_extensions
@@ -452,7 +454,6 @@ impl CreateCredentialRequest {
                     // MakeCredentialHmacOrPrfInput::Hmac is not used directly by webauthn
                     MakeCredentialHmacOrPrfInput::None
                 },
-                ..Default::default()
             };
             Some(extensions)
         } else {
@@ -549,11 +550,8 @@ impl CreatePublicKeyCredentialResponse {
             fdo::Error::Failed("Invalid credential received from authenticator".to_string())
         })?;
 
-        let unsigned_extensions = response
-            .ctap
-            .unsigned_extensions_output
-            .as_ref()
-            .map(|extensions| serde_json::to_string(&extensions).unwrap());
+        let unsigned_extensions =
+            serde_json::to_string(&response.ctap.unsigned_extensions_output).unwrap();
         let authenticator_data_blob = auth_data.to_response_bytes().unwrap();
         let attestation_statement =
             (&response.ctap.attestation_statement)

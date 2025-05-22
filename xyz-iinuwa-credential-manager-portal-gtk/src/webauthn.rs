@@ -122,7 +122,7 @@ pub(crate) struct MakeCredentialExtensions {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub min_pin_length: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub cred_protect_policy: Option<CredentialProtectionPolicy>,
+    pub credential_protection_policy: Option<CredentialProtectionPolicy>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enforce_credential_protection_policy: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -454,7 +454,7 @@ pub struct CreatePublicKeyCredentialResponse {
     response: AttestationResponse,
 
     /// JSON string of extension output
-    extensions: Option<String>,
+    extensions: String,
 
     /// If the device used is builtin ("platform") or removable ("cross-platform", aka "roaming")
     attachment_modality: String,
@@ -547,7 +547,7 @@ impl CreatePublicKeyCredentialResponse {
         authenticator_data: Vec<u8>,
         client_data_json: String,
         transports: Option<Vec<String>>,
-        extension_output_json: Option<String>,
+        extension_output_json: String,
         attachment_modality: String,
     ) -> Self {
         Self {
@@ -574,12 +574,8 @@ impl CreatePublicKeyCredentialResponse {
             "attestationObject": URL_SAFE_NO_PAD.encode(&self.response.attestation_object),
             "transports": self.response.transports,
         });
-        let extensions = if let Some(extensions) = &self.extensions {
-            serde_json::from_str(extensions).expect("Extensions json to be formatted properly")
-        } else {
-            // extensions field seems to be required, even if empty
-            json!({})
-        };
+        let extensions: serde_json::Value = serde_json::from_str(&self.extensions)
+            .expect("Extensions json to be formatted properly");
         let output = json!({
             "id": self.get_id(),
             "rawId": self.get_id(),
