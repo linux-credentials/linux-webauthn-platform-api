@@ -436,7 +436,7 @@ pub(crate) fn make_credential(
         authenticator_data,
         client_data_json,
         None,
-        None,
+        String::new(),
         String::from("platform"),
     );
     Ok((response, credential_source))

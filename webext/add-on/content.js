@@ -93,11 +93,11 @@ async function cloneCredentialResponse(credential) {
         // so we need a lot of deconstructions. So no: obj.clientExtensionResults = cloneInto(credential.clientExtensionResults, obj);
         const extensions = {}
         if (credential.clientExtensionResults) {
-            if (credential.clientExtensionResults.hmac_get_secret) {
-                extensions.hmac_get_secret = {}
-                extensions.hmac_get_secret.output1 = Uint8Array.fromBase64(credential.clientExtensionResults.hmac_get_secret.output1, options);
-                if (credential.clientExtensionResults.hmac_get_secret.output2) {
-                    extensions.hmac_get_secret.output2 = Uint8Array.fromBase64(credential.clientExtensionResults.hmac_get_secret.output2, options);
+            if (credential.clientExtensionResults.hmacGetSecret) {
+                extensions.hmacGetSecret = {}
+                extensions.hmacGetSecret.output1 = Uint8Array.fromBase64(credential.clientExtensionResults.hmacGetSecret.output1, options);
+                if (credential.clientExtensionResults.hmacGetSecret.output2) {
+                    extensions.hmacGetSecret.output2 = Uint8Array.fromBase64(credential.clientExtensionResults.hmacGetSecret.output2, options);
                 }
             }
 
@@ -110,13 +110,20 @@ async function cloneCredentialResponse(credential) {
                         extensions.prf.results.second = Uint8Array.fromBase64(credential.clientExtensionResults.prf.results.second, options);
                     }
                 }
+                if (credential.clientExtensionResults.prf.enabled) {
+                    extensions.prf.enabled = cloneInto(credential.clientExtensionResults.prf.enabled, extensions.prf)
+                }
             }
 
-            if (credential.clientExtensionResults.large_blob) {
-                extensions.large_blob = {}
-                if (credential.clientExtensionResults.large_blob.blob) {
-                    extensions.large_blob.blob = Uint8Array.fromBase64(credential.clientExtensionResults.large_blob.blob, options);
+            if (credential.clientExtensionResults.largeBlob) {
+                extensions.largeBlob = {}
+                if (credential.clientExtensionResults.largeBlob.blob) {
+                    extensions.largeBlob.blob = Uint8Array.fromBase64(credential.clientExtensionResults.largeBlob.blob, options);
                 }
+            }
+
+            if (credential.clientExtensionResults.credProps) {
+                extensions.credProps = cloneInto(credential.clientExtensionResults.credProps, extensions)
             }
         }
         obj.response = cloneInto(response, obj, { cloneFunctions: true })
