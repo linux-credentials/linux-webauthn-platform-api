@@ -28,6 +28,7 @@ use zbus::{
 
 use crate::application::ExampleApplication;
 use crate::config::{GETTEXT_PACKAGE, LOCALEDIR, RESOURCES_FILE};
+use crate::credential_service::hybrid::DummyHybridHandler;
 use crate::credential_service::CredentialService;
 use crate::view_model::CredentialType;
 use crate::view_model::Operation;
@@ -65,7 +66,8 @@ fn start_gui_thread(rx: Receiver<(CredentialRequest, Sender<Option<CredentialRes
                         cred_types: vec![CredentialType::Passkey],
                     },
                 };
-                let credential_service = CredentialService::new(cred_request, data.clone());
+                let credential_service =
+                    CredentialService::new(cred_request, data.clone(), DummyHybridHandler {});
                 let event_loop = async_std::task::spawn(async move {
                     let mut vm = view_model::ViewModel::new(
                         operation,
@@ -294,16 +296,16 @@ impl GetAssertionResponseInternal {
 #[derive(Clone, Debug, DeserializeDict, Type)]
 #[zvariant(signature = "dict")]
 pub struct CreateCredentialRequest {
-    origin: Option<String>,
-    is_same_origin: Option<bool>,
+    pub(crate) origin: Option<String>,
+    pub(crate) is_same_origin: Option<bool>,
     #[zvariant(rename = "type")]
-    r#type: String,
+    pub(crate) r#type: String,
     #[zvariant(rename = "publicKey")]
-    public_key: Option<CreatePublicKeyCredentialRequest>,
+    pub(crate) public_key: Option<CreatePublicKeyCredentialRequest>,
 }
 
 impl CreateCredentialRequest {
-    fn try_into_ctap2_request(
+    pub(crate) fn try_into_ctap2_request(
         &self,
     ) -> std::result::Result<(MakeCredentialRequest, String), webauthn::Error> {
         if self.public_key.is_none() {

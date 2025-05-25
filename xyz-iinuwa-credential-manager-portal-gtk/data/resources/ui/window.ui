@@ -121,6 +121,51 @@
 
             <child>
               <object class="GtkStackPage">
+                <property name="name">hybrid_qr</property>
+                <property name="title">Scan the QR code to connect your device</property>
+                <property name="child">
+                  <object class="GtkBox">
+                    <property name="orientation">vertical</property>
+                    <child>
+                      <object class="GtkSpinner">
+                        <binding name="visible">
+                          <lookup name="qr_spinner_visible">
+                            <lookup name="view-model">
+                              ExampleApplicationWindow
+                            </lookup>
+                          </lookup>
+                        </binding>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="GtkPicture" id="qr_code_pic">
+                        <binding name="visible">
+                          <lookup name="qr_code_visible">
+                            <lookup name="view-model">
+                              ExampleApplicationWindow
+                            </lookup>
+                          </lookup>
+                        </binding>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="GtkLabel">
+                        <binding name="label">
+                          <lookup name="prompt">
+                            <lookup name="view-model">
+                              ExampleApplicationWindow
+                            </lookup>
+                          </lookup>
+                        </binding>
+                      </object>
+                    </child>
+                  </object>
+                </property>
+              </object>
+            </child>
+
+            <child>
+              <object class="GtkStackPage">
                 <property name="name">choose_credential</property>
                 <property name="title">Choose credential</property>
                 <property name="child">

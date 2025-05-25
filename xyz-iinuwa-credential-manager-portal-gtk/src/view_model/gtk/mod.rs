@@ -3,10 +3,13 @@ pub mod device;
 
 use async_std::channel::{Receiver, Sender};
 use glib::clone;
-use gtk::gio;
-use gtk::glib;
+use gtk::gdk::Texture;
+use gtk::gdk_pixbuf::Pixbuf;
+use gtk::gio::{self, Cancellable, MemoryInputStream};
+use gtk::glib::{self, Bytes};
 use gtk::prelude::*;
 use gtk::subclass::prelude::*;
+use qrcode::QrCode;
 use tracing::debug;
 
 use self::credential::CredentialObject;
@@ -53,6 +56,14 @@ mod imp {
         pub(super) tx: RefCell<Option<Sender<ViewEvent>>>,
         // hybrid_qr_state: HybridState,
         // hybrid_qr_code_data: Option<Vec<u8>>,
+        #[property(get, set)]
+        pub qr_code_paintable: RefCell<Option<Texture>>,
+
+        #[property(get, set)]
+        pub qr_code_visible: RefCell<bool>,
+
+        #[property(get, set)]
+        pub qr_spinner_visible: RefCell<bool>,
     }
 
     // The central trait for subclassing a GObject
@@ -140,7 +151,23 @@ impl ViewModel {
                                 ViewUpdate::UsbNeedsUserPresence => {
                                     view_model.set_prompt("Touch your device");
                                 }
+                                ViewUpdate::HybridNeedsQrCode(qr_code) => {
+                                    view_model.set_prompt("Scan the QR code with your device to begin authentication.");
+                                    let texture = view_model.draw_qr_code(&qr_code);
+                                    view_model.set_qr_code_paintable(&texture);
+                                    view_model.set_qr_code_visible(true);
+                                    view_model.set_qr_spinner_visible(true);
+                                }
+                                ViewUpdate::HybridConnecting => {
+                                    view_model.set_qr_code_visible(false);
+                                    _ = view_model.qr_code_paintable().take();
+                                    view_model.set_prompt(
+                                        "Device connected. Follow the instructions on your device",
+                                    );
+                                    view_model.set_qr_spinner_visible(true);
+                                }
                                 ViewUpdate::Completed => {
+                                    view_model.set_qr_spinner_visible(false);
                                     view_model.set_completed(true);
                                 }
                             }
@@ -249,6 +276,9 @@ impl ViewModel {
             Transport::Usb => {
                 self.set_prompt("Insert your security key.");
             }
+            Transport::HybridQr => {
+                self.set_prompt("");
+            }
             Transport::Internal => {}
             _ => {
                 todo!();
@@ -272,6 +302,15 @@ impl ViewModel {
 
     pub async fn send_usb_device_pin(&self, pin: String) {
         self.send_event(ViewEvent::UsbPinEntered(pin)).await;
+    }
+
+    fn draw_qr_code(&self, qr_data: &str) -> Texture {
+        let qr_code = QrCode::new(qr_data).expect("QR code to be valid");
+        let svg_xml = qr_code.render::<qrcode::render::svg::Color>().build();
+        let stream = MemoryInputStream::from_bytes(&Bytes::from(svg_xml.as_bytes()));
+        let pixbuf = Pixbuf::from_stream_at_scale(&stream, 450, 450, true, None::<&Cancellable>)
+            .expect("SVG to render");
+        Texture::for_pixbuf(&pixbuf)
     }
 
     fn get_sender(&self) -> Sender<ViewEvent> {
