@@ -1,8 +1,14 @@
+pub mod hybrid;
+
 use std::{
+    fmt::Debug,
     sync::{Arc, Mutex, OnceLock},
+    task::Poll,
     time::Duration,
 };
 
+use async_std::stream::Stream;
+use futures_lite::{FutureExt, StreamExt};
 use libwebauthn::{
     self,
     ops::webauthn::{GetAssertionResponse, MakeCredentialResponse},
@@ -26,8 +32,10 @@ use crate::{
     view_model::{Device, Transport},
 };
 
+use hybrid::{HybridHandler, HybridState};
+
 #[derive(Debug)]
-pub struct CredentialService {
+pub struct CredentialService<H: HybridHandler> {
     devices: Vec<Device>,
 
     usb_state: AsyncArc<AsyncMutex<UsbState>>,
@@ -36,17 +44,26 @@ pub struct CredentialService {
     cred_request: CredentialRequest,
     // Place to store data to be returned to the caller
     cred_response: Arc<Mutex<Option<CredentialResponse>>>,
+
+    hybrid_handler: H,
 }
 
-impl CredentialService {
+impl<H: HybridHandler> CredentialService<H> {
     pub fn new(
         cred_request: CredentialRequest,
         cred_response: Arc<Mutex<Option<CredentialResponse>>>,
+        hybrid_handler: H,
     ) -> Self {
-        let devices = vec![Device {
-            id: String::from("0"),
-            transport: Transport::Usb,
-        }];
+        let devices = vec![
+            Device {
+                id: String::from("0"),
+                transport: Transport::Usb,
+            },
+            Device {
+                id: String::from("1"),
+                transport: Transport::HybridQr,
+            },
+        ];
         let usb_state = AsyncArc::new(AsyncMutex::new(UsbState::Idle));
         Self {
             devices,
@@ -56,6 +73,8 @@ impl CredentialService {
 
             cred_request,
             cred_response,
+
+            hybrid_handler,
         }
     }
 
@@ -317,6 +336,49 @@ impl CredentialService {
         // let mut data = self.output_data.lock().unwrap();
         // data.replace((self.cred_response));
     }
+
+    pub(crate) fn get_hybrid_credential(&self) -> HybridStateStream<H::Stream> {
+        let stream = self.hybrid_handler.start();
+        HybridStateStream {
+            inner: stream,
+            cred_response: self.cred_response.clone(),
+        }
+    }
+}
+
+pub struct HybridStateStream<H> {
+    inner: H,
+    cred_response: Arc<Mutex<Option<CredentialResponse>>>,
+}
+
+impl<H> Stream for HybridStateStream<H>
+where
+    H: Stream<Item = HybridState> + Unpin + Sized,
+{
+    type Item = HybridState;
+
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        let cred_response = &self.cred_response.clone();
+        match Box::pin(Box::pin(self).as_mut().inner.next()).poll(cx) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Some(state)) => {
+                if let HybridState::Completed(assertion) = &state {
+                    let mut cred_response = cred_response.lock().unwrap();
+                    cred_response.replace(CredentialResponse::GetPublicKeyCredentialResponse(
+                        GetAssertionResponseInternal::new(
+                            assertion.clone(),
+                            String::from("cross-platform"),
+                        ),
+                    ));
+                }
+                Poll::Ready(Some(state))
+            }
+            Poll::Ready(None) => Poll::Ready(None),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -462,4 +524,157 @@ fn tokio() -> &'static Runtime {
 enum AuthenticatorResponse {
     CredentialCreated(MakeCredentialResponse),
     CredentialsAsserted(GetAssertionResponse),
+}
+
+#[cfg(test)]
+mod test {
+    use std::{
+        sync::{Arc, Mutex},
+        task::Poll,
+    };
+
+    use async_std::stream::{Stream, StreamExt};
+    use libwebauthn::ops::webauthn::MakeCredentialRequest;
+
+    use crate::dbus::{
+        CreateCredentialRequest, CreatePublicKeyCredentialRequest, CredentialRequest,
+    };
+
+    use super::{
+        hybrid::{HybridHandlerInternal, HybridState},
+        CredentialService, HybridHandler,
+    };
+
+    /*
+    #[test]
+    fn test_hybrid() {
+        let request_json = r#"
+        {
+            "rp": {
+                "name": "webauthn.io",
+                "id": "webauthn.io"
+            },
+            "user": {
+                "id": "d2ViYXV0aG5pby0xMjM4OTF5",
+                "name": "123891y",
+                "displayName": "123891y"
+            },
+            "challenge": "Ox0AXQz7WUER7BGQFzvVrQbReTkS3sepVGj26qfUhhrWSarkDbGF4T4NuCY1aAwHYzOzKMJJ2YRSatetl0D9bQ",
+            "pubKeyCredParams": [
+                {
+                    "type": "public-key",
+                    "alg": -8
+                },
+                {
+                    "type": "public-key",
+                    "alg": -7
+                },
+                {
+                    "type": "public-key",
+                    "alg": -257
+                }
+            ],
+            "timeout": 60000,
+            "excludeCredentials": [],
+            "authenticatorSelection": {
+                "residentKey": "preferred",
+                "requireResidentKey": false,
+                "userVerification": "preferred"
+            },
+            "attestation": "none",
+            "hints": [],
+            "extensions": {
+                "credProps": true
+            }
+        }"#.to_string();
+        let (req, client_data_json) = CreateCredentialRequest {
+            origin: Some("webauthn.io".to_string()),
+            is_same_origin: Some(true),
+            r#type: "public-key".to_string(),
+            public_key: Some(CreatePublicKeyCredentialRequest {
+                request_json: request_json,
+            }),
+        }
+        .try_into_ctap2_request()
+        .unwrap();
+        let request = CredentialRequest::CreatePublicKeyCredentialRequest(req);
+        let response = Arc::new(Mutex::new(None));
+        let qr_code = String::from("FIDO:/078241338926040702789239694720083010994762289662861130514766991835876383562063181103169246410435938367110394959927031730060360967994421343201235185697538107096654083332");
+        // SHA256(webauthn.io) + AUTH_FLAGS(UP | UV) + u32(1)
+        #[rustfmt::skip]
+        let attestation_object = vec![
+            // map(3)
+            0xb9, 0x0, 0x3,
+            // text(authData)
+            0x68, 0x61, 0x75, 0x74, 0x68, 0x44, 0x61, 0x74, 0x61,
+            // bytes(sha-256(webauthn.io) + AUTH_FLAGS(UP | UV) + signCount(1))
+            0x58, 0x25, 0x74, 0xa6, 0xea, 0x92, 0x13, 0xc9, 0x9c, 0x2f, 0x74, 0xb2, 0x24, 0x92,
+            0xb3, 0x20, 0xcf, 0x40, 0x26, 0x2a, 0x94, 0xc1, 0xa9, 0x50, 0xa0, 0x39, 0x7f, 0x29,
+            0x25, 0xb, 0x60, 0x84, 0x1e, 0xf0, 0x5, 0x0, 0x0, 0x0, 0x1,
+            // text(fmt)
+            0x63, 0x66, 0x6d, 0x74,
+            // text(none)
+            0x64, 0x6e, 0x6f, 0x6e, 0x65,
+            // text attStmt
+            0x67, 0x61, 0x74, 0x74, 0x53, 0x74, 0x6d, 0x74,
+            // map(0)
+            0xb9, 0x0, 0x0,
+        ];
+
+        let hybrid_handler = StaticHybridHandler::new(vec![
+            HybridState::Init(qr_code),
+            HybridState::Waiting,
+            HybridState::Connecting,
+            HybridState::Completed(assertion),
+        ]);
+        let cred_service = CredentialService::new(request, response, hybrid_handler);
+        let mut stream = cred_service.hybrid_handler.start();
+        async_std::task::block_on(async {
+            while let Some(state) = stream.next().await {
+                println!("{:?}", state);
+            }
+        })
+    }
+    */
+
+    #[derive(Debug)]
+    struct StaticHybridHandler {
+        states: Vec<HybridState>,
+    }
+
+    impl StaticHybridHandler {
+        fn new(states: Vec<HybridState>) -> Self {
+            Self { states }
+        }
+    }
+    impl HybridHandler for StaticHybridHandler {}
+
+    impl HybridHandlerInternal for StaticHybridHandler {
+        type Stream = StaticHybridHandlerStream;
+        fn start(&self) -> Self::Stream {
+            StaticHybridHandlerStream {
+                qr_code: String::from("FIDO:/078241338926040702789239694720083010994762289662861130514766991835876383562063181103169246410435938367110394959927031730060360967994421343201235185697538107096654083332"),
+                states: self.states.clone(),
+            }
+        }
+    }
+
+    struct StaticHybridHandlerStream {
+        qr_code: String,
+        states: Vec<HybridState>,
+    }
+    impl Stream for StaticHybridHandlerStream {
+        type Item = HybridState;
+
+        fn poll_next(
+            self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> Poll<Option<Self::Item>> {
+            if self.states.len() == 0 {
+                Poll::Ready(None)
+            } else {
+                Poll::Ready(Some((self.get_mut()).states.remove(0)))
+            }
+        }
+    }
 }

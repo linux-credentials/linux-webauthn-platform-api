@@ -1,12 +1,13 @@
 use std::cell::RefCell;
 
 use glib::Properties;
-use gtk::prelude::*;
+use gtk::gdk::Texture;
 use gtk::subclass::prelude::*;
 use gtk::{
     gio,
     glib::{self, clone},
 };
+use gtk::{prelude::*, Picture};
 
 use crate::application::ExampleApplication;
 use crate::config::{APP_ID, PROFILE};
@@ -14,6 +15,8 @@ use crate::view_model::gtk::{device::DeviceObject, ViewModel};
 use crate::view_model::Transport;
 
 mod imp {
+    use gtk::Picture;
+
     use super::*;
 
     #[derive(Debug, Properties, gtk::CompositeTemplate)]
@@ -31,6 +34,9 @@ mod imp {
 
         #[template_child]
         pub usb_pin_entry: TemplateChild<gtk::PasswordEntry>,
+
+        #[template_child]
+        pub qr_code_pic: TemplateChild<Picture>,
     }
 
     #[gtk::template_callbacks]
@@ -72,6 +78,7 @@ mod imp {
                 view_model: RefCell::default(),
                 stack: TemplateChild::default(),
                 usb_pin_entry: TemplateChild::default(),
+                qr_code_pic: TemplateChild::default(),
             }
         }
     }
@@ -146,6 +153,7 @@ impl ExampleApplicationWindow {
         let view_model = &self.view_model();
         let view_model = view_model.as_ref().expect("view model to exist");
         let stack: &gtk::Stack = &self.imp().stack.get();
+        let qr_code_pic: &Picture = &self.imp().qr_code_pic.get();
         view_model.connect_selected_device_notify(clone!(
             #[weak]
             stack,
@@ -159,8 +167,19 @@ impl ExampleApplicationWindow {
                     //       If so, we need to transition this to choose_credential as well.
                     //       For now, we'll skip it.
                     Ok(Transport::Usb) => stack.set_visible_child_name("usb"),
+                    Ok(Transport::HybridQr) => stack.set_visible_child_name("hybrid_qr"),
                     _ => {}
                 };
+            }
+        ));
+
+        view_model.connect_qr_code_paintable_notify(clone!(
+            #[weak]
+            qr_code_pic,
+            move |vm| {
+                let paintable = vm.qr_code_paintable();
+                let paintable = paintable.and_downcast_ref::<Texture>();
+                qr_code_pic.set_paintable(paintable);
             }
         ));
 
@@ -179,6 +198,7 @@ impl ExampleApplicationWindow {
                     .expect("selected device to exist at notify");
                 match d.transport().try_into() {
                     Ok(Transport::Usb) => stack.set_visible_child_name("usb"),
+                    Ok(Transport::HybridQr) => stack.set_visible_child_name("hybrid_qr"),
                     _ => {}
                 };
             }

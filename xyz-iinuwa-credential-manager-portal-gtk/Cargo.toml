@@ -23,6 +23,8 @@ zbus = "5.5.0"
 libwebauthn = { git = "https://github.com/linux-credentials/libwebauthn", rev = "73970627b81ff775fbd80fb70694bef049ac2c85" }
 async-trait = "0.1.88"
 tokio = { version = "1", features = ["rt-multi-thread"] }
+futures-lite = "2.6.0"
 
+qrcode = "0.14.1"
 # this is temporary until we move COSE -> Vec<u8> serialization methods into libwebauthn
 cosey = "0.3.2"

@@ -10,11 +10,12 @@ use async_std::{
 };
 use tracing::info;
 
+use crate::credential_service::hybrid::DummyHybridHandler;
 use crate::credential_service::CredentialService;
 
 #[derive(Debug)]
 pub(crate) struct ViewModel {
-    credential_service: Arc<Mutex<CredentialService>>,
+    credential_service: Arc<Mutex<CredentialService<DummyHybridHandler>>>,
     tx_update: Sender<ViewUpdate>,
     rx_event: Receiver<ViewEvent>,
     bg_update: Sender<BackgroundEvent>,
@@ -41,7 +42,7 @@ pub(crate) struct ViewModel {
 impl ViewModel {
     pub(crate) fn new(
         operation: Operation,
-        credential_service: CredentialService,
+        credential_service: CredentialService<DummyHybridHandler>,
         rx_event: Receiver<ViewEvent>,
         tx_update: Sender<ViewUpdate>,
     ) -> Self {
@@ -148,6 +149,9 @@ impl ViewModel {
                     .cancel_device_discovery_usb()
                     .await
                     .unwrap(),
+                Transport::HybridQr => {
+                    todo!("Implement cancellation for Hybrid QR");
+                }
                 _ => {
                     todo!()
                 }
@@ -159,15 +163,6 @@ impl ViewModel {
         match device.transport {
             Transport::Usb => {
                 let cred_service = self.credential_service.clone();
-                /*
-                _ = self
-                    .credential_service
-                    .lock()
-                    .await
-                    .start_device_discovery_usb()
-                    .await
-                    .unwrap();
-                */
                 let tx = self.bg_update.clone();
                 async_std::task::spawn(async move {
                     // TODO: add cancellation
@@ -200,6 +195,42 @@ impl ViewModel {
                             }
                         };
                     }
+                });
+            }
+            Transport::HybridQr => {
+                let tx = self.bg_update.clone();
+                let cred_service = self.credential_service.clone();
+                let mut stream = cred_service.lock().await.get_hybrid_credential();
+                async_std::task::spawn(async move {
+                    while let Some(state) = stream.next().await {
+                        let state = state.into();
+                        match state {
+                            HybridState::Idle => {}
+                            HybridState::Started(_) => {
+                                tx.send(BackgroundEvent::HybridQrStateChanged(state))
+                                    .await
+                                    .unwrap();
+                            }
+                            HybridState::Waiting => {
+                                tx.send(BackgroundEvent::HybridQrStateChanged(state))
+                                    .await
+                                    .unwrap();
+                            }
+                            HybridState::Connecting => {
+                                tx.send(BackgroundEvent::HybridQrStateChanged(state))
+                                    .await
+                                    .unwrap();
+                            }
+                            HybridState::Completed => {
+                                tx.send(BackgroundEvent::HybridQrStateChanged(state))
+                                    .await
+                                    .unwrap();
+                            }
+                            HybridState::UserCancelled => break,
+                        };
+                        async_std::task::sleep(Duration::from_secs(2)).await;
+                    }
+                    tracing::debug!("Broke out of hybrid QR state stream");
                 });
             }
             _ => {
@@ -291,6 +322,38 @@ impl ViewModel {
                         UsbState::NotListening | UsbState::Waiting | UsbState::UserCancelled => {}
                     }
                 }
+                Event::Background(BackgroundEvent::HybridQrStateChanged(state)) => {
+                    self.hybrid_qr_state = state.clone();
+                    tracing::debug!("Received HybridQrState::{:?}", &state);
+                    match state {
+                        HybridState::Idle => {
+                            self.hybrid_qr_code_data = None;
+                        }
+                        HybridState::Started(qr_code) => {
+                            self.hybrid_qr_code_data = Some(qr_code.clone().into_bytes());
+                            self.tx_update
+                                .send(ViewUpdate::HybridNeedsQrCode(qr_code))
+                                .await
+                                .unwrap();
+                        }
+                        HybridState::Waiting => {}
+                        HybridState::Connecting => {
+                            self.hybrid_qr_code_data = None;
+                            self.tx_update
+                                .send(ViewUpdate::HybridConnecting)
+                                .await
+                                .unwrap();
+                        }
+                        HybridState::Completed => {
+                            self.hybrid_qr_code_data = None;
+                            self.credential_service.lock().await.complete_auth();
+                            self.tx_update.send(ViewUpdate::Completed).await.unwrap();
+                        }
+                        HybridState::UserCancelled => {
+                            self.hybrid_qr_code_data = None;
+                        }
+                    };
+                }
             };
         }
     }
@@ -315,11 +378,15 @@ pub enum ViewUpdate {
     UsbNeedsUserPresence,
     Completed,
     SelectingDevice,
+
+    HybridNeedsQrCode(String),
+    HybridConnecting,
 }
 
 pub enum BackgroundEvent {
     UsbPressed,
     UsbStateChanged(UsbState),
+    HybridQrStateChanged(HybridState),
 }
 
 pub enum Event {
@@ -358,10 +425,13 @@ pub enum HybridState {
     #[default]
     Idle,
 
-    /// Awaiting BLE advert from phone.
+    /// QR code flow is starting
+    Started(String),
+
+    /// QR code is being displayed, awaiting QR code scan and BLE advert from phone.
     Waiting,
 
-    /// Connecting to caBLE tunnel.
+    /// BLE advert received, connecting to caBLE tunnel with shared secret.
     Connecting,
 
     /*  I don't think is necessary to signal.
@@ -373,6 +443,22 @@ pub enum HybridState {
 
     // This isn't actually sent from the server.
     UserCancelled,
+}
+
+impl From<crate::credential_service::hybrid::HybridState> for HybridState {
+    fn from(value: crate::credential_service::hybrid::HybridState) -> Self {
+        match value {
+            crate::credential_service::hybrid::HybridState::Init(qr_code) => {
+                HybridState::Started(qr_code)
+            }
+            crate::credential_service::hybrid::HybridState::Waiting => HybridState::Waiting,
+            crate::credential_service::hybrid::HybridState::Connecting => HybridState::Connecting,
+            crate::credential_service::hybrid::HybridState::Completed(_) => HybridState::Completed,
+            crate::credential_service::hybrid::HybridState::UserCancelled => {
+                HybridState::UserCancelled
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
