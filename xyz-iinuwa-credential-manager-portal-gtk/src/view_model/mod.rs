@@ -166,35 +166,10 @@ impl<C: CredentialServiceClient + Send> ViewModel<C> {
                 async_std::task::spawn(async move {
                     // TODO: add cancellation
                     while let Some(usb_state) = stream.next().await {
+                        // forward to background event loop
                         tx.send(BackgroundEvent::UsbStateChanged(usb_state))
                             .await
                             .unwrap();
-                        /*
-                        Ok(usb_state) => {
-                            let state = usb_state.into();
-                            if prev_state != state {
-                                println!("{:?}", state);
-                                tx.send(BackgroundEvent::UsbStateChanged(state.clone()))
-                                    .await
-                                    .unwrap();
-                            }
-                            prev_state = state;
-                            match prev_state {
-                                UsbState::Completed => break,
-                                UsbState::UserCancelled => break,
-                                _ => {}
-                            };
-                            async_std::task::sleep(Duration::from_millis(50)).await;
-                        }
-                        Err(err) => {
-                            // TODO: move to error page
-                            tracing::error!(
-                                "There was an error trying to get credentials from USB: {}",
-                                err
-                            );
-                            break;
-                        }
-                        */
                     }
                 });
             }
@@ -204,31 +179,10 @@ impl<C: CredentialServiceClient + Send> ViewModel<C> {
                 let mut stream = cred_service.lock().await.get_hybrid_credential().await;
                 async_std::task::spawn(async move {
                     while let Some(state) = stream.next().await {
-                        let state = state.into();
-                        match state {
-                            HybridState::Idle => {}
-                            HybridState::Started(_) => {
-                                tx.send(BackgroundEvent::HybridQrStateChanged(state))
-                                    .await
-                                    .unwrap();
-                            }
-                            HybridState::Connecting => {
-                                tx.send(BackgroundEvent::HybridQrStateChanged(state))
-                                    .await
-                                    .unwrap();
-                            }
-                            HybridState::Connected => {
-                                tx.send(BackgroundEvent::HybridQrStateChanged(state))
-                                    .await
-                                    .unwrap();
-                            }
-                            HybridState::Completed => {
-                                tx.send(BackgroundEvent::HybridQrStateChanged(state))
-                                    .await
-                                    .unwrap();
-                            }
-                            HybridState::UserCancelled => break,
-                        };
+                        // forward to background event loop
+                        tx.send(BackgroundEvent::HybridQrStateChanged(state.into()))
+                            .await
+                            .unwrap();
                     }
                     tracing::debug!("Broke out of hybrid QR state stream");
                 });
