@@ -61,18 +61,36 @@ impl InProcessUsbHandler {
                     for mut device in hid_devices {
                         let tx = blinking_tx.clone();
                         tokio::spawn(async move {
-                            let (mut channel, _state_rx) = device.channel().await.unwrap();
-                            let res = channel
-                                .blink_and_wait_for_user_presence(Duration::from_secs(300))
-                                .await;
-                            drop(channel);
-                            match res {
-                                Ok(true) => {
-                                    let _ = tx.send(Some(device)).await;
-                                }
-                                Ok(false) | Err(_) => {
-                                    let _ = tx.send(None).await;
-                                }
+                            let res = match device.channel().await {
+                                Ok((ref mut channel, _)) => channel
+                                    .blink_and_wait_for_user_presence(Duration::from_secs(300))
+                                    .await
+                                    .map_err(|err| {
+                                        format!(
+                                            "Failed to send wink request to authenticator: {:?}",
+                                            err
+                                        )
+                                    })
+                                    .and_then(|blinking| {
+                                        if blinking {
+                                            Ok(())
+                                        } else {
+                                            Err("Authenticator was not able to blink".to_string())
+                                        }
+                                    }),
+                                Err(err) => Err(format!(
+                                    "Failed to create channel for USB authenticator: {:?}",
+                                    err
+                                )),
+                            }
+                            .inspect_err(|err| tracing::warn!(err))
+                            .ok();
+
+                            if let Err(err) = tx.send(res.map(|_| device)).await {
+                                tracing::error!(
+                                    "Failed to send notification of wink response: {:?}",
+                                    err,
+                                );
                             }
                         });
                     }
