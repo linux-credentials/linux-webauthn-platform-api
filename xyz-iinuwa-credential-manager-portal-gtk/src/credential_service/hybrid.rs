@@ -102,6 +102,7 @@ impl HybridHandler for InternalHybridHandler {
     }
 }
 
+/// Used to communicate privileged state between handler and credential service.
 #[derive(Clone, Debug)]
 pub(super) enum HybridStateInternal {
     /// Awaiting BLE advert from phone. Content is the FIDO string to be
@@ -123,10 +124,13 @@ pub(super) enum HybridStateInternal {
     UserCancelled,
 }
 
+// this is here to prevent making HybridStateInternal public to the whole crate.
+/// Messages between hybrid handler and credential service.
 pub struct HybridEvent {
     pub(super) state: HybridStateInternal,
 }
 
+/// Used to communicate privileged state between credential service and UI.
 #[derive(Clone, Debug)]
 pub enum HybridState {
     /// Awaiting BLE advert from phone. Content is the FIDO string to be displayed to the user, which contains QR secret
@@ -139,7 +143,7 @@ pub enum HybridState {
     /// Tunnel is established, waiting for user to release credential on their device.
     Connected,
 
-    /// Authenticator data
+    /// Authenticator data has been received
     Completed,
 
     // This isn't actually sent from the server.

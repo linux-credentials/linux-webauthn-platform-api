@@ -340,10 +340,13 @@ impl UsbHandler for InProcessUsbHandler {
     }
 }
 
+// this exists to prevent making UsbStateInternal type public to the whole crate.
+/// A message between USB handler and credential service
 pub struct UsbEvent {
     pub(super) state: UsbStateInternal,
 }
 
+/// Used to share internal state between handler and credential service
 #[derive(Clone, Debug, Default)]
 pub(super) enum UsbStateInternal {
     /// Not polling for FIDO USB device.
@@ -387,6 +390,7 @@ pub(super) enum UsbStateInternal {
     SelectingDevice(Vec<HidDevice>),
 }
 
+/// Used to share public state between  credential service and UI.
 #[derive(Clone, Debug, Default)]
 pub enum UsbState {
     /// Not polling for FIDO USB device.
@@ -536,6 +540,7 @@ async fn handle_usb_updates(
     debug!("USB update channel closed.");
 }
 
+/// Messages sent between USB authenticator and handler for UV
 enum UsbUvMessage {
     NeedsPin {
         attempts_left: Option<u32>,
