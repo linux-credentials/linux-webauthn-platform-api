@@ -321,6 +321,10 @@ impl<C: CredentialServiceClient + Send> ViewModel<C> {
                         HybridState::UserCancelled => {
                             self.hybrid_qr_code_data = None;
                         }
+                        HybridState::Failed => {
+                            self.hybrid_qr_code_data = None;
+                            self.tx_update.send(ViewUpdate::Failed).await.unwrap();
+                        }
                     };
                 }
             };
@@ -412,6 +416,9 @@ pub enum HybridState {
 
     // This isn't actually sent from the server.
     UserCancelled,
+
+    /// Failed to receive a credential
+    Failed,
 }
 
 impl From<crate::credential_service::hybrid::HybridState> for HybridState {
@@ -426,6 +433,7 @@ impl From<crate::credential_service::hybrid::HybridState> for HybridState {
             crate::credential_service::hybrid::HybridState::UserCancelled => {
                 HybridState::UserCancelled
             }
+            crate::credential_service::hybrid::HybridState::Failed => HybridState::Failed,
         }
     }
 }

@@ -8,7 +8,7 @@ use libwebauthn::webauthn::{Error as WebAuthnError, WebAuthn};
 
 use crate::dbus::CredentialRequest;
 
-use super::AuthenticatorResponse;
+use super::{AuthenticatorResponse, Error};
 
 pub(crate) trait HybridHandler {
     fn start(
@@ -30,6 +30,7 @@ impl HybridHandler for InternalHybridHandler {
         &self,
         request: &CredentialRequest,
     ) -> impl Stream<Item = HybridEvent> + Unpin + Send + Sized + 'static {
+        tracing::debug!("Starting hybrid operation");
         let request = request.clone();
         let (tx, rx) = async_std::channel::unbounded();
         tokio::spawn(async move {
@@ -58,19 +59,31 @@ impl HybridHandler for InternalHybridHandler {
                 if let Err(err) = tx.send(HybridStateInternal::Connected).await {
                     tracing::error!("Failed to send caBLE update: {:?}", err)
                 }
-                let response: AuthenticatorResponse = loop {
+                tracing::debug!("Polling hybrid channel for updates.");
+                let response: Result<AuthenticatorResponse, Error> = loop {
                     match &request {
                         CredentialRequest::CreatePublicKeyCredentialRequest(make_request) => {
                             match channel.webauthn_make_credential(make_request).await {
                                 Ok(response) => break Ok(response.into()),
                                 Err(WebAuthnError::Ctap(ctap_error)) => {
                                     if ctap_error.is_retryable_user_error() {
-                                        tracing::debug!("Oops, try again! Error: {}", ctap_error);
+                                        tracing::debug!("Retrying credential creation operation because of CTAP error: {:?}", ctap_error);
                                         continue;
+                                    } else {
+                                        tracing::error!(
+                                            "Received CTAP unrecoverable CTAP error: {:?}",
+                                            ctap_error
+                                        );
+                                        break Err(Error::AuthenticatorError);
                                     }
-                                    break Err(WebAuthnError::Ctap(ctap_error));
                                 }
-                                Err(err) => break Err(err),
+                                Err(err) => {
+                                    tracing::error!(
+                                        "Received unrecoverable error from authenticator: {:?}",
+                                        err
+                                    );
+                                    break Err(Error::AuthenticatorError);
+                                }
                             };
                         }
                         CredentialRequest::GetPublicKeyCredentialRequest(get_request) => {
@@ -78,18 +91,32 @@ impl HybridHandler for InternalHybridHandler {
                                 Ok(response) => break Ok(response.into()),
                                 Err(WebAuthnError::Ctap(ctap_error)) => {
                                     if ctap_error.is_retryable_user_error() {
-                                        println!("Oops, try again! Error: {}", ctap_error);
+                                        tracing::debug!("Retrying assertion operation because of CTAP error: {:?}", ctap_error);
                                         continue;
+                                    } else {
+                                        tracing::error!(
+                                            "Received CTAP unrecoverable CTAP error: {:?}",
+                                            ctap_error
+                                        );
+                                        break Err(Error::AuthenticatorError);
                                     }
-                                    break Err(WebAuthnError::Ctap(ctap_error));
                                 }
-                                Err(err) => break Err(err),
+                                Err(err) => {
+                                    tracing::error!(
+                                        "Received unrecoverable error from authenticator: {:?}",
+                                        err
+                                    );
+                                    break Err(Error::AuthenticatorError);
+                                }
                             };
                         }
                     }
-                }
-                .unwrap();
-                if let Err(err) = tx.send(HybridStateInternal::Completed(response)).await {
+                };
+                let terminal_state = match response {
+                    Ok(auth_response) => HybridStateInternal::Completed(auth_response),
+                    Err(_) => HybridStateInternal::Failed,
+                };
+                if let Err(err) = tx.send(terminal_state).await {
                     tracing::error!("Failed to send caBLE update: {:?}", err)
                 }
             });
@@ -118,6 +145,7 @@ pub(super) enum HybridStateInternal {
     /// Authenticator data
     Completed(AuthenticatorResponse),
 
+    Failed,
     // TODO(cancellation)
     // This isn't actually sent from the server.
     #[allow(dead_code)]
@@ -146,6 +174,9 @@ pub enum HybridState {
     /// Authenticator data has been received
     Completed,
 
+    /// Hybrid operation failed.
+    Failed,
+
     // This isn't actually sent from the server.
     UserCancelled,
 }
@@ -158,6 +189,7 @@ impl From<HybridStateInternal> for HybridState {
             HybridStateInternal::Connected => HybridState::Connected,
             HybridStateInternal::Completed(_) => HybridState::Completed,
             HybridStateInternal::UserCancelled => HybridState::UserCancelled,
+            HybridStateInternal::Failed => HybridState::Failed,
         }
     }
 }

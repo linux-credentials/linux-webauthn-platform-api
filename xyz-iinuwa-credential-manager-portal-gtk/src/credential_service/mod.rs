@@ -194,6 +194,12 @@ enum AuthenticatorResponse {
     CredentialsAsserted(GetAssertionResponse),
 }
 
+#[derive(Debug, Clone)]
+pub enum Error {
+    AuthenticatorError,
+    Unknown,
+}
+
 impl From<MakeCredentialResponse> for AuthenticatorResponse {
     fn from(value: MakeCredentialResponse) -> Self {
         Self::CredentialCreated(value)
