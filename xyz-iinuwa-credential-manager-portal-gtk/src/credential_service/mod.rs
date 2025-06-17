@@ -197,7 +197,6 @@ enum AuthenticatorResponse {
 #[derive(Debug, Clone)]
 pub enum Error {
     AuthenticatorError,
-    Unknown,
 }
 
 impl From<MakeCredentialResponse> for AuthenticatorResponse {

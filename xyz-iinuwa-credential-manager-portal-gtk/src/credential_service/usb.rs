@@ -38,20 +38,33 @@ impl InProcessUsbHandler {
         let (signal_tx, mut signal_rx) = mpsc::channel(256);
         let (cred_tx, mut cred_rx) = mpsc::channel(1);
         debug!("polling for USB status");
+        let mut failures = 0;
         loop {
             tracing::debug!("current usb state: {:?}", state);
             let prev_usb_state = state;
             let next_usb_state = match prev_usb_state {
                 UsbStateInternal::Idle | UsbStateInternal::Waiting => {
-                    let mut hid_devices =
-                        libwebauthn::transport::hid::list_devices().await.unwrap();
-                    if hid_devices.is_empty() {
-                        let state = UsbStateInternal::Waiting;
-                        Ok(state)
-                    } else if hid_devices.len() == 1 {
-                        Ok(UsbStateInternal::Connected(hid_devices.swap_remove(0)))
-                    } else {
-                        Ok(UsbStateInternal::SelectingDevice(hid_devices))
+                    match libwebauthn::transport::hid::list_devices().await {
+                        Ok(mut hid_devices) => {
+                            if hid_devices.is_empty() {
+                                let state = UsbStateInternal::Waiting;
+                                Ok(state)
+                            } else if hid_devices.len() == 1 {
+                                Ok(UsbStateInternal::Connected(hid_devices.swap_remove(0)))
+                            } else {
+                                Ok(UsbStateInternal::SelectingDevice(hid_devices))
+                            }
+                        }
+                        Err(err) => {
+                            failures += 1;
+                            if failures == 5 {
+                                Err(format!("Failed to list USB authenticators: {:?}. Cancelling USB state updates.", err))
+                            } else {
+                                tracing::warn!("Failed to list USB authenticators: {:?}. Throttling USB state updates", err);
+                                tokio::time::sleep(Duration::from_secs(1)).await;
+                                Ok(prev_usb_state)
+                            }
+                        }
                     }
                 }
                 UsbStateInternal::SelectingDevice(hid_devices) => {
@@ -274,54 +287,79 @@ async fn handle_events(
     mut device: HidDevice,
     signal_tx: &Sender<Result<UsbUvMessage, String>>,
 ) {
-    let (mut channel, state_rx) = device.channel().await.unwrap();
-    let signal_tx2 = signal_tx.clone().downgrade();
-    tokio::spawn(async move {
-        handle_usb_updates(&signal_tx2, state_rx).await;
-        debug!("Reached end of USB update task");
-    });
-    match cred_request {
-        CredentialRequest::CreatePublicKeyCredentialRequest(make_cred_request) => loop {
-            match channel.webauthn_make_credential(make_cred_request).await {
-                Ok(response) => {
-                    notify_ceremony_completed(
-                        signal_tx,
-                        AuthenticatorResponse::CredentialCreated(response),
-                    )
-                    .await;
-                    break;
-                }
-                Err(WebAuthnError::Ctap(ctap_error)) if ctap_error.is_retryable_user_error() => {
-                    warn!("Retrying WebAuthn make credential operation");
-                    continue;
-                }
-                Err(err) => {
-                    notify_ceremony_failed(signal_tx, err.to_string()).await;
-                    break;
-                }
+    let device_debug = device.to_string();
+    match device.channel().await {
+        Err(err) => {
+            tracing::error!("Failed to open channel to USB authenticator, cannot receive user verification events: {:?}", err);
+        }
+        Ok((mut channel, state_rx)) => {
+            let signal_tx2 = signal_tx.clone().downgrade();
+            tokio::spawn(async move {
+                handle_usb_updates(&signal_tx2, state_rx).await;
+                debug!("Reached end of USB update task");
+            });
+            match cred_request {
+                CredentialRequest::CreatePublicKeyCredentialRequest(make_cred_request) => loop {
+                    tracing::debug!(
+                        "Polling for credential from USB authenticator {}",
+                        &device_debug
+                    );
+                    match channel.webauthn_make_credential(make_cred_request).await {
+                        Ok(response) => {
+                            tracing::debug!("Received attestation from USB authenticator");
+                            notify_ceremony_completed(
+                                signal_tx,
+                                AuthenticatorResponse::CredentialCreated(response),
+                            )
+                            .await;
+                            break;
+                        }
+                        Err(WebAuthnError::Ctap(ctap_error))
+                            if ctap_error.is_retryable_user_error() =>
+                        {
+                            warn!("Retrying WebAuthn make credential operation");
+                            continue;
+                        }
+                        Err(err) => {
+                            tracing::warn!(
+                                "Failed to create credential with USB authenticator: {:?}",
+                                err
+                            );
+                            notify_ceremony_failed(signal_tx, err.to_string()).await;
+                            break;
+                        }
+                    };
+                },
+                CredentialRequest::GetPublicKeyCredentialRequest(get_cred_request) => loop {
+                    match channel.webauthn_get_assertion(get_cred_request).await {
+                        Ok(response) => {
+                            tracing::debug!("Received assertion from USB authenticator");
+                            notify_ceremony_completed(
+                                signal_tx,
+                                AuthenticatorResponse::CredentialsAsserted(response),
+                            )
+                            .await;
+                            break;
+                        }
+                        Err(WebAuthnError::Ctap(ctap_error))
+                            if ctap_error.is_retryable_user_error() =>
+                        {
+                            tracing::warn!("Retrying WebAuthn get credential operation");
+                            continue;
+                        }
+                        Err(err) => {
+                            tracing::warn!(
+                                "Failed to get credential from USB authenticator: {:?}",
+                                err
+                            );
+                            notify_ceremony_failed(signal_tx, err.to_string()).await;
+                            break;
+                        }
+                    };
+                },
             };
-        },
-        CredentialRequest::GetPublicKeyCredentialRequest(get_cred_request) => loop {
-            match channel.webauthn_get_assertion(get_cred_request).await {
-                Ok(response) => {
-                    notify_ceremony_completed(
-                        signal_tx,
-                        AuthenticatorResponse::CredentialsAsserted(response),
-                    )
-                    .await;
-                    break;
-                }
-                Err(WebAuthnError::Ctap(ctap_error)) if ctap_error.is_retryable_user_error() => {
-                    warn!("Retrying WebAuthn get credential operation");
-                    continue;
-                }
-                Err(err) => {
-                    notify_ceremony_failed(signal_tx, err.to_string()).await;
-                    break;
-                }
-            };
-        },
-    };
+        }
+    }
 }
 
 async fn notify_ceremony_completed(
@@ -335,7 +373,9 @@ async fn notify_ceremony_completed(
 }
 
 async fn notify_ceremony_failed(signal_tx: &Sender<Result<UsbUvMessage, String>>, err: String) {
-    signal_tx.send(Err(err)).await.unwrap();
+    if let Err(tx_err) = signal_tx.send(Err(err)).await {
+        tracing::error!("Failed to notify that ceremony failed: {:?}", tx_err);
+    }
 }
 
 impl UsbHandler for InProcessUsbHandler {
@@ -520,25 +560,31 @@ async fn handle_usb_updates(
         };
         match msg {
             UxUpdate::UvRetry { attempts_left } => {
-                signal_tx
+                if let Err(err) = signal_tx
                     .send(Ok(UsbUvMessage::NeedsUserVerification { attempts_left }))
                     .await
-                    .unwrap();
+                {
+                    tracing::error!("Authenticator requested user verficiation, but we cannot relay the message to credential service: {:?}", err);
+                }
             }
             UxUpdate::PinRequired(pin_update) => {
                 if pin_update.attempts_left.is_some_and(|num| num <= 1) {
                     // TODO: cancel authenticator operation
-                    signal_tx.send(Err("No more PIN attempts allowed. Select a different authenticator or try again later.".to_string())).await.unwrap();
+                    if let Err(err) = signal_tx.send(Err("No more PIN attempts allowed. Select a different authenticator or try again later.".to_string())).await {
+                        tracing::error!("Authenticator cannot process anymore PIN requests, but we cannot relay the message to credential service: {:?}", err);
+                    }
                     continue;
                 }
                 let (pin_tx, mut pin_rx) = mpsc::channel(1);
-                signal_tx
+                if let Err(err) = signal_tx
                     .send(Ok(UsbUvMessage::NeedsPin {
                         pin_tx,
                         attempts_left: pin_update.attempts_left,
                     }))
                     .await
-                    .unwrap();
+                {
+                    tracing::error!("Authenticator requested a PIN from the user, but we cannot relay the message to the credential service: {:?}", err);
+                }
                 match pin_rx.recv().await {
                     Some(pin) => match pin_update.send_pin(&pin) {
                         Ok(()) => {}
@@ -548,10 +594,9 @@ async fn handle_usb_updates(
                 }
             }
             UxUpdate::PresenceRequired => {
-                signal_tx
-                    .send(Ok(UsbUvMessage::NeedsUserPresence))
-                    .await
-                    .unwrap();
+                if let Err(err) = signal_tx.send(Ok(UsbUvMessage::NeedsUserPresence)).await {
+                    tracing::error!("Authenticator requested user presence, but we cannot relay the message to the credential service: {:?}", err);
+                }
             }
         }
     }
