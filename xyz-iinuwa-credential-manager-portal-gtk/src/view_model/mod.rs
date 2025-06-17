@@ -386,16 +386,20 @@ pub enum ViewUpdate {
     SetTitle(String),
     SetDevices(Vec<Device>),
     SetCredentials(Vec<Credential>),
+
     WaitingForDevice(Device),
+    SelectingDevice,
+
     UsbNeedsPin { attempts_left: Option<u32> },
     UsbNeedsUserVerification { attempts_left: Option<u32> },
     UsbNeedsUserPresence,
-    Completed,
-    SelectingDevice,
 
     HybridNeedsQrCode(String),
     HybridConnecting,
     HybridConnected,
+
+    Completed,
+    Failed,
 }
 
 pub enum BackgroundEvent {

@@ -210,6 +210,24 @@
               </object>
             </child>
 
+            <child>
+              <object class="GtkStackPage">
+                <property name="name">failed</property>
+                <property name="title">Something went wrong.</property>
+                <property name="child">
+                  <object class="GtkBox">
+                    <property name="orientation">vertical</property>
+                    <child>
+                      <object class="GtkLabel">
+                        <property name="label">Something went wrong while retrieving a credential. Please try again later or use a different authenticator.</property>
+                      </object>
+                    </child>
+                  </object>
+                </property>
+              </object>
+            </child>
+
+
           </object>
         </child>
       </object>
