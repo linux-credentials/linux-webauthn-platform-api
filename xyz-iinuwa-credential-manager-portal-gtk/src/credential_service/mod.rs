@@ -197,6 +197,10 @@ enum AuthenticatorResponse {
 #[derive(Debug, Clone)]
 pub enum Error {
     AuthenticatorError,
+    NoCredentials,
+    PinAttemptsExhausted,
+    UserVerficiationAttemptsExhausted,
+    Internal(String),
 }
 
 impl From<MakeCredentialResponse> for AuthenticatorResponse {
