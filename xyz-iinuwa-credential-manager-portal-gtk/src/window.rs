@@ -190,6 +190,16 @@ impl ExampleApplicationWindow {
             }
         ));
 
+        view_model.connect_failed_notify(clone!(
+            #[weak]
+            stack,
+            move |vm| {
+                if vm.completed() {
+                    stack.set_visible_child_name("failed");
+                }
+            }
+        ));
+
         view_model.connect_credentials_notify(clone!(
             #[weak]
             stack,

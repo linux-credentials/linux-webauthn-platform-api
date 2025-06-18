@@ -194,6 +194,15 @@ enum AuthenticatorResponse {
     CredentialsAsserted(GetAssertionResponse),
 }
 
+#[derive(Debug, Clone)]
+pub enum Error {
+    AuthenticatorError,
+    NoCredentials,
+    PinAttemptsExhausted,
+    UserVerficiationAttemptsExhausted,
+    Internal(String),
+}
+
 impl From<MakeCredentialResponse> for AuthenticatorResponse {
     fn from(value: MakeCredentialResponse) -> Self {
         Self::CredentialCreated(value)

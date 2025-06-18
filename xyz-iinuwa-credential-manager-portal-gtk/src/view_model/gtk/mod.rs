@@ -48,6 +48,9 @@ mod imp {
         #[property(get, set)]
         pub completed: RefCell<bool>,
 
+        #[property(get, set)]
+        pub failed: RefCell<bool>,
+
         // pub(super) vm: RefCell<Option<crate::view_model::ViewModel>>,
         pub(super) rx: RefCell<Option<Receiver<ViewUpdate>>>,
         pub(super) tx: RefCell<Option<Sender<ViewEvent>>>,
@@ -171,6 +174,10 @@ impl ViewModel {
                                 ViewUpdate::Completed => {
                                     view_model.set_qr_spinner_visible(false);
                                     view_model.set_completed(true);
+                                }
+                                ViewUpdate::Failed => {
+                                    view_model.set_qr_spinner_visible(false);
+                                    view_model.set_failed(true);
                                 }
                             }
                         }
