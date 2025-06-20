@@ -145,15 +145,6 @@ impl InProcessUsbHandler {
                         None => Err("Channel disconnected".to_string()),
                     }
                 }
-                UsbStateInternal::NeedsPin {
-                    attempts_left: Some(attempts_left),
-                    ..
-                } if attempts_left <= 1 => Err("No more USB attempts left".to_string()),
-                UsbStateInternal::NeedsUserVerification {
-                    attempts_left: Some(attempts_left),
-                } if attempts_left <= 1 => {
-                    Err("No more on-device user device attempts left".to_string())
-                }
                 UsbStateInternal::NeedsPin { .. }
                 | UsbStateInternal::NeedsUserVerification { .. }
                 | UsbStateInternal::NeedsUserPresence => match signal_rx.recv().await {
